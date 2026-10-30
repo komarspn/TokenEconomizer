@@ -225,7 +225,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("te", {
-    description: "TokenEconomizer: status | microskills | config | repos (what it learned here, what it did)",
+    description: "TokenEconomizer: status | microskills | refold | config | repos (what it learned here, what it did)",
     handler: async (args, ctx) => {
       // `te` splits the line itself (shlex), so a quoted fact id with spaces stays one argument.
       const argv = ["--argline", (args || "").trim() || "status"];
