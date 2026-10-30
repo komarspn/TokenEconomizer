@@ -226,6 +226,51 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
 
   pi.registerCommand("te", {
     description: "TokenEconomizer: status | microskills | refold | config | repos (what it learned here, what it did)",
+    getArgumentCompletions: (prefix) => {
+      const commands: Record<string, string> = {
+        status: "Show repository status",
+        microskills: "Show learned repository facts",
+        facts: "Alias for microskills",
+        toolprune: "Inspect or change tool pruning",
+        untool: "Alias for toolprune",
+        config: "Show or change settings",
+        fold: "Learn from finished sessions",
+        refold: "Rebuild learned state from recorded sessions",
+        judge: "Judge a recorded session",
+        doctor: "Check installation and diagnostics",
+        repos: "List, migrate, or merge repository state",
+        repomap: "Show or refresh the repository map",
+        probe: "Probe learning on recent sessions",
+      };
+      const actions: Record<string, string[]> = {
+        toolprune: ["show", "apply", "restore", "refresh-catalog", "measure", "apply-pending"],
+        config: ["show", "set", "unset"],
+        repos: ["list", "migrate", "merge"],
+        repomap: ["show", "refresh"],
+      };
+      const flags: Record<string, string[]> = {
+        status: ["--json"],
+        config: ["--global"],
+        fold: ["--session", "--verbose"],
+        judge: ["--session", "--job"],
+        repos: ["--json", "--quiet"],
+        probe: ["--sessions", "--model", "--keep"],
+      };
+      const words = prefix.trimStart().split(/\s+/);
+      const partial = words.pop() ?? "";
+      const command = words[0] === "facts" ? "microskills" : words[0] === "untool" ? "toolprune" : words[0];
+      if (words.length && !Object.hasOwn(commands, command)) return null;
+      if (["--cwd", "--host", "--session", "--job", "--sessions", "--model"].includes(words.at(-1) ?? "")) return null;
+      const options = words.length
+        ? [...(words.length === 1 ? actions[command] ?? [] : []), ...(flags[command] ?? []), "--help", "--cwd", "--host"]
+        : [...Object.keys(commands), "--help"];
+      const matches = options.filter((value) => value.startsWith(partial)).map((value) => ({
+        value: [...words, value].join(" "),
+        label: value,
+        ...(!words.length && commands[value] ? { description: commands[value] } : {}),
+      }));
+      return matches.length ? matches : null;
+    },
     handler: async (args, ctx) => {
       const argv = (args || "status").trim().split(/\s+/).filter(Boolean);
       // The session id lets `te status` say when this session is recorded under the repository

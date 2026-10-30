@@ -331,6 +331,55 @@ console.log(JSON.stringify([
     assert json.loads(run.stdout) == ["", facts, facts, "", "", facts]
 
 
+def test_pi_te_completes_commands_actions_and_flags():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
+    script = """
+const { pathToFileURL } = await import("node:url");
+const { default: extension } = await import(pathToFileURL(process.argv[1]).href);
+let command;
+extension({ on() {}, registerCommand(name, spec) {
+  if (name === "te") command = spec;
+} });
+const prefixes = ["", " ", "re", "config ", "config s", "untool a", "status --j",
+  "config set --g", "fold --session ", "probe --model abc", "unknown ", "xyz",
+  "constructor "];
+const results = {};
+for (const prefix of prefixes) results[prefix] = await command.getArgumentCompletions(prefix);
+console.log(JSON.stringify(results));
+"""
+    run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
+                          "--input-type=module", "-e", script, ext],
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+    results = json.loads(run.stdout)
+
+    from tokeneconomizer.plugin.cli import build_parser
+    import argparse
+    parser = build_parser()
+    subcommands = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+    assert {item["value"] for item in results[""]} == set(subcommands.choices) | {"--help"}
+    assert results[" "] == results[""]
+    assert all(item.get("description") for item in results[""] if item["value"] != "--help")
+
+    def values(prefix):
+        return [item["value"] for item in results[prefix] or []]
+
+    assert values("re") == ["refold", "repos", "repomap"]
+    assert values("config ") == ["config show", "config set", "config unset",
+                                  "config --global", "config --help", "config --cwd", "config --host"]
+    assert values("config s") == ["config show", "config set"]
+    assert values("untool a") == ["untool apply", "untool apply-pending"]
+    assert values("status --j") == ["status --json"]
+    assert values("config set --g") == ["config set --global"]
+    for prefix in ("fold --session ", "probe --model abc", "unknown ", "xyz", "constructor "):
+        assert results[prefix] is None
+
+
 def test_the_plugin_directory_is_also_a_pi_package():
     """One directory, three agents: Pi loads the extension its `pi` manifest names, and that
     extension drives the same launchers the Claude Code and Codex hooks run."""
