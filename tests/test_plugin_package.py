@@ -331,7 +331,7 @@ console.log(JSON.stringify([
     assert json.loads(run.stdout) == ["", facts, facts, "", "", facts]
 
 
-def test_pi_te_completes_commands_actions_and_flags():
+def test_pi_te_completes_commands_actions_flags_and_settings():
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
@@ -345,7 +345,11 @@ extension({ on() {}, registerCommand(name, spec) {
 } });
 const prefixes = ["", " ", "re", "config ", "config s", "untool a", "status --j",
   "config set --g", "fold --session ", "probe --model abc", "unknown ", "xyz",
-  "constructor "];
+  "constructor ", "config set ", "config set micro", "config set microskills=",
+  "config set microskills=env", "config set microskills=invalid",
+  "config set --global micro", "config --global set micro",
+  "config set shadow=true micro", "config set --cwd ", "config show micro",
+  "config set unknown=", "microskills="];
 const results = {};
 for (const prefix of prefixes) results[prefix] = await command.getArgumentCompletions(prefix);
 console.log(JSON.stringify(results));
@@ -376,7 +380,30 @@ console.log(JSON.stringify(results));
     assert values("untool a") == ["untool apply", "untool apply-pending"]
     assert values("status --j") == ["status --json"]
     assert values("config set --g") == ["config set --global"]
-    for prefix in ("fold --session ", "probe --model abc", "unknown ", "xyz", "constructor "):
+
+    from tokeneconomizer.plugin.config import LiveConfig, LOOPGUARD_KEYS, MICROSKILLS
+    keys = set(LiveConfig().as_dict()) - {"loopguard_thresholds"}
+    keys.update(f"loopguard.{key}" for key in LOOPGUARD_KEYS)
+    assert set(values("config set ")) == {
+        f"config set {key}=" for key in keys
+    } | {"config set --global", "config set --help", "config set --cwd", "config set --host"}
+    for prefix in ("config set micro", "config set --global micro",
+                   "config --global set micro", "config set shadow=true micro"):
+        head = prefix.rsplit(" ", 1)[0]
+        assert set(values(prefix)) == {
+            f"{head} {key}=" for key in keys if key.startswith("micro")
+        }
+    assert set(values("config set microskills=")) == {
+        f"config set microskills={value}" for value in (*MICROSKILLS, "on")
+    }
+    assert values("config set microskills=env") == [
+        "config set microskills=envfacts", "config set microskills=envfacts+distiller"
+    ]
+    assert all(item["label"].startswith("microskills=")
+               for item in results["config set microskills="])
+    for prefix in ("fold --session ", "probe --model abc", "unknown ", "xyz", "constructor ",
+                   "config set microskills=invalid", "config set --cwd ", "config show micro",
+                   "config set unknown=", "microskills="):
         assert results[prefix] is None
 
 
