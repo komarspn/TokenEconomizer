@@ -264,6 +264,23 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
       const options = words.length
         ? [...(words.length === 1 ? actions[command] ?? [] : []), ...(flags[command] ?? []), "--help", "--cwd", "--host"]
         : [...Object.keys(commands), "--help"];
+      if (command === "config" && words.slice(1).filter((word) => word !== "--global")[0] === "set") {
+        const keys = [
+          "enabled", "mode", "microskills", "microskills_max_facts", "microskills_max_tokens",
+          "microskills_propose_every", "toolprune", "toolprune_evidence", "toolprune_min_sessions",
+          "toolprune_sessions", "toolprune_quiet_minutes", "toolprune_protect", "loopguard",
+          "loopguard_aggr", "loopguard_nudges", "repomap", "repomap_tokens", "repomap_python",
+          "repomap_timeout", "paid_model", "shadow", "vocabulary",
+          ...[
+            "min_turns", "edit_churn", "distinct_edit_files", "error_outputs", "stagnation",
+            "envelope_pct", "envelope_margin", "envelope_min_samples", "backstop_mult",
+            "judge_confidence", "gate_min_turns", "gate_error_outputs",
+          ].map((key) => `loopguard.${key}`),
+        ];
+        options.push(...(partial.startsWith("microskills=")
+          ? ["off", "envfacts", "envfacts+distiller", "distiller", "on"].map((value) => `microskills=${value}`)
+          : keys.map((key) => `${key}=`)));
+      }
       const matches = options.filter((value) => value.startsWith(partial)).map((value) => ({
         value: [...words, value].join(" "),
         label: value,
