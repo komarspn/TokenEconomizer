@@ -332,6 +332,40 @@ console.log(JSON.stringify([
 
 
 def test_pi_te_completes_commands_actions_flags_and_settings():
+    from tokeneconomizer.plugin.config import (
+        ALIASES, LiveConfig, LOOPGUARD_KEYS, ON_VALUE, _VALUE_ALIASES,
+    )
+
+    cfg = LiveConfig()
+    settings = {key: list(cfg._CHOICES.get(key, ())) for key in cfg.as_dict()
+                if key != "loopguard_thresholds"}
+    for key in ON_VALUE:
+        if "on" not in settings[key]:
+            settings[key].append("on")
+    for key, value in cfg.as_dict().items():
+        if isinstance(value, bool):
+            settings[key] = ["true", "false"]
+    for key, values in _VALUE_ALIASES.items():
+        settings[key].extend(values)
+    settings.update((f"loopguard.{key}", []) for key in LOOPGUARD_KEYS)
+    aliases = dict(ALIASES)
+    aliases.update((f"spiral.{key}", f"loopguard.{key}") for key in LOOPGUARD_KEYS)
+    settings.update((old, settings[new]) for old, new in aliases.items()
+                    if new in settings)
+    unset_keys = set(settings) | {"loopguard_thresholds", "spiral_thresholds"}
+    extra_prefixes = ["config unset ", "config unset --g", "config unset microskills=",
+                      "config set --host pi toolprune=", "config --cwd /tmp set toolprune=",
+                      "config unset --cwd ", "config unset --host ",
+                      "config set constructor=", "config set loopguard_thresholds="]
+    for key, choices in settings.items():
+        extra_prefixes.extend((f"config set {key}=", f"config unset {key}"))
+        for value in choices:
+            extra_prefixes.append(f"config set {key}={value[:1]}")
+    for action in ("set", "unset"):
+        pair = "shadow=true" if action == "set" else "shadow"
+        extra_prefixes.extend((f"config {action} --global tool", f"config --global {action} tool",
+                               f"config {action} {pair} tool"))
+
     node = shutil.which("node")
     if not node:
         pytest.skip("node is not installed")
@@ -351,11 +385,13 @@ const prefixes = ["", " ", "re", "config ", "config s", "untool a", "status --j"
   "config set shadow=true micro", "config set --cwd ", "config show micro",
   "config set unknown=", "microskills="];
 const results = {};
-for (const prefix of prefixes) results[prefix] = await command.getArgumentCompletions(prefix);
+for (const prefix of [...prefixes, ...JSON.parse(process.argv[2])]) {
+  results[prefix] = await command.getArgumentCompletions(prefix);
+}
 console.log(JSON.stringify(results));
 """
     run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
-                          "--input-type=module", "-e", script, ext],
+                          "--input-type=module", "-e", script, ext, json.dumps(extra_prefixes)],
                          capture_output=True, text=True, timeout=60)
     if run.returncode and "strip-types" in run.stderr:
         pytest.skip("this node cannot load TypeScript")
@@ -381,9 +417,7 @@ console.log(JSON.stringify(results));
     assert values("status --j") == ["status --json"]
     assert values("config set --g") == ["config set --global"]
 
-    from tokeneconomizer.plugin.config import LiveConfig, LOOPGUARD_KEYS, MICROSKILLS
-    keys = set(LiveConfig().as_dict()) - {"loopguard_thresholds"}
-    keys.update(f"loopguard.{key}" for key in LOOPGUARD_KEYS)
+    keys = set(settings)
     assert set(values("config set ")) == {
         f"config set {key}=" for key in keys
     } | {"config set --global", "config set --help", "config set --cwd", "config set --host"}
@@ -394,14 +428,44 @@ console.log(JSON.stringify(results));
             f"{head} {key}=" for key in keys if key.startswith("micro")
         }
     assert set(values("config set microskills=")) == {
-        f"config set microskills={value}" for value in (*MICROSKILLS, "on")
+        f"config set microskills={value}" for value in settings["microskills"]
     }
     assert values("config set microskills=env") == [
         "config set microskills=envfacts", "config set microskills=envfacts+distiller"
     ]
     assert all(item["label"].startswith("microskills=")
                for item in results["config set microskills="])
+    assert set(values("config unset ")) == {
+        f"config unset {key}" for key in unset_keys
+    } | {"config unset --global", "config unset --help", "config unset --cwd", "config unset --host"}
+    assert values("config unset --g") == ["config unset --global"]
+    for key, choices in settings.items():
+        assert set(values(f"config set {key}=")) == {
+            f"config set {key}={value}" for value in choices
+        }
+        assert set(values(f"config unset {key}")) == {
+            f"config unset {name}" for name in unset_keys if name.startswith(key)
+        }
+        for value in choices:
+            assert set(values(f"config set {key}={value[:1]}")) == {
+                f"config set {key}={choice}" for choice in choices if choice.startswith(value[:1])
+            }
+            assert cfg.set(key, value), cfg.warnings
+    for action in ("set", "unset"):
+        pair = "shadow=true" if action == "set" else "shadow"
+        for prefix in (f"config {action} --global tool", f"config --global {action} tool",
+                       f"config {action} {pair} tool"):
+            head = prefix.rsplit(" ", 1)[0]
+            assert set(values(prefix)) == {
+                f"{head} {key}{'=' if action == 'set' else ''}"
+                for key in keys if key.startswith("tool")
+            }
+    for prefix in ("config set --host pi toolprune=", "config --cwd /tmp set toolprune="):
+        head = prefix.rsplit(" ", 1)[0]
+        assert set(values(prefix)) == {f"{head} toolprune={value}" for value in settings["toolprune"]}
     for prefix in ("fold --session ", "probe --model abc", "unknown ", "xyz", "constructor ",
+                   "config unset microskills=", "config unset --cwd ", "config unset --host ",
+                   "config set constructor=", "config set loopguard_thresholds=",
                    "config set microskills=invalid", "config set --cwd ", "config show micro",
                    "config set unknown=", "microskills="):
         assert results[prefix] is None
