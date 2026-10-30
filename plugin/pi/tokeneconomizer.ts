@@ -165,7 +165,9 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
     const entries = (ctx.sessionManager.getBranch?.() ?? []) as any[];
     const carried = entries.some((e) => e?.type === "message");
     const source = carried ? "resume" : SOURCE[event.reason] ?? "startup";
-    const out = await hook({ ...base(ctx), hook_event_name: "SessionStart", source }, ctx.mode);
+    const out = await hook({ ...base(ctx), hook_event_name: "SessionStart", source,
+      session_dir: ctx.sessionManager.getSessionDir?.() ?? "",
+    }, ctx.mode);
     manual = carried ? carriedSection(entries) : out?.hookSpecificOutput?.additionalContext ?? "";
     notify(ctx, out?.systemMessage);
   });

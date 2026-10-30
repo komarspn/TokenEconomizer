@@ -193,6 +193,12 @@ class LiveController:
             history.maybe_start(self.ctx)
         except Exception:
             self._record_error()
+        discovered = fold.discover_pi_sessions(
+            self.ctx, self.sid, self.p.get("session_dir") or "", self.host.transcript(self.p))
+        if discovered:
+            outputs.append(self.host.notice(
+                f"TokenEconomizer: discovered {discovered} previous Pi session(s); "
+                "quiet sessions are queued for background learning."))
         # Not while an import of earlier sessions runs: it folds these once it is done.
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
