@@ -24,7 +24,7 @@
                                       now (runs by itself, once, after an upgrade)
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
                                       repository's), for state whose checkouts are gone
-    te refold                         rebuild recorded Pi sessions with microskills=envfacts
+    te refold                         rebuild recorded Pi sessions with micro-skills enabled
     te doctor                         check the installation
     te --host copilot probe           real Copilot sessions in a throwaway repository: does a
                                       learned fact change what the model does, and what does the
@@ -523,8 +523,8 @@ def cmd_fold(args):
 
 def cmd_refold(args):
     ctx = _ctx(args)
-    if ctx.host.name != "pi" or ctx.config.microskills != "envfacts":
-        print("not changed: refold requires --host pi and microskills=envfacts (no model calls)")
+    if ctx.host.name != "pi" or ctx.config.microskills == "off":
+        print("not changed: refold requires --host pi and microskills enabled")
         return 1
     if _refuse_unwritable(ctx.store.base):
         return 1

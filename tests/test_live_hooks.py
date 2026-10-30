@@ -1206,30 +1206,52 @@ def test_refold_rolls_back_publication_errors(env, repo, tmp_path, monkeypatch):
     assert {name: open(ctx.store.path(name), "rb").read() for name in files} == before
 
 
-def test_refold_cli_queues_and_reports_completion(env, repo, tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("profile", ["envfacts", "distiller", "envfacts+distiller",
+                                     "on", "true", "yes", "1", "enable", "enabled"])
+def test_refold_cli_queues_and_reports_completion(env, repo, tmp_path, monkeypatch, capsys, profile):
     from tokeneconomizer.plugin import cli
 
-    path = pi_trap_session(str(tmp_path / "old.jsonl"), repo, 1)
-    run_session(env, repo, "pi1", path, host="pi")
-    monkeypatch.setattr(os, "environ", dict(env, TE_SESSION_ID="current"))
+    from tokeneconomizer.plugin import sidecall
+
+    calls = []
+
+    def runner(prompt, model):
+        calls.append((prompt, model))
+        return "{}", 120.0
+
+    monkeypatch.setattr(sidecall, "runner_for", lambda *args: runner)
+    for i in range(5):
+        path = pi_trap_session(str(tmp_path / f"old{i}.jsonl"), repo, i)
+        run_session(dict(env, TE_MICROSKILLS="off"), repo, f"pi{i}", path, host="pi")
+    monkeypatch.setattr(os, "environ", dict(env, TE_SESSION_ID="current", TE_MICROSKILLS=profile))
     spawned = []
     monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append((argv, log)) or True)
     argv = ["--host", "pi", "--cwd", repo, "refold"]
     assert cli.main(argv) == 0
     assert spawned == [(["refold", "--run", "--exclude-session", "current"], "refold.log")]
     assert cli.main(argv + ["--run"]) == 0
-    assert "refold completed: 1 sessions" in capsys.readouterr().out
+    assert "refold completed: 5 sessions" in capsys.readouterr().out
     assert cli.main(["--host", "pi", "--cwd", repo, "status", "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["refold"]["status"] == "completed"
     st = store_for(env, repo, "pi")
+    expected_profile = profile if profile in ("envfacts", "distiller") else "envfacts+distiller"
+    injection = st.read("injection.json")
+    assert injection["profile"] == expected_profile
+    assert injection["sessions"] == 5
+    assert ("python -m pytest" in injection["rendered"]) == (expected_profile != "distiller")
+    assert len(calls) == (0 if profile == "envfacts" else 2)
+    assert [r["overhead"]["optimizer_tokens"] for r in st.read_lines("ledger.jsonl")] == (
+        [0, 0, 0, 0, 0] if profile == "envfacts" else [0, 120.0, 0, 0, 120.0])
     st.write("refold.json", {"status": "publishing", "backup": "saved-state"})
     assert cli.main(argv) == 1
     assert "restore backup saved-state" in capsys.readouterr().out
     assert fold.fold_session(LiveContext.build(hosts.Pi(), repo, env), "new", path) is None
 
 
-@pytest.mark.parametrize("profile,host", [("off", "pi"), ("envfacts+distiller", "pi"),
-                                         ("envfacts", "claude")])
+@pytest.mark.parametrize("profile,host", [
+    ("off", "pi"), ("false", "pi"), ("no", "pi"), ("0", "pi"),
+    ("disable", "pi"), ("disabled", "pi"), ("envfacts", "claude"),
+])
 def test_refold_rejects_unsupported_modes_without_reset(env, repo, monkeypatch, profile, host):
     from tokeneconomizer.plugin import cli
 
@@ -1239,6 +1261,10 @@ def test_refold_rejects_unsupported_modes_without_reset(env, repo, monkeypatch, 
     assert cli.main(["--host", host, "--cwd", repo, "refold"]) == 1
     assert st.read("folded.json") == {"keep": True}
     assert st.read("refold.json") is None
+    ctx = LiveContext.build(hosts.HOSTS[host](), repo, dict(env, TE_MICROSKILLS=profile))
+    with pytest.raises(ValueError, match="microskills enabled"):
+        fold.refold(ctx)
+    assert st.read("folded.json") == {"keep": True}
 
 
 def test_refold_refuses_a_busy_fold(env, repo):

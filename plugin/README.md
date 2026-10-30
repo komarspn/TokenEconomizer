@@ -299,7 +299,7 @@ See [What to expect](#what-to-expect).
 
 ### Rebuild learning from recorded sessions
 
-After enabling free learning, use:
+After enabling micro-skills, use (shown here with the model-free profile):
 
 ```text
 /te config set microskills=envfacts
@@ -309,9 +309,15 @@ After enabling free learning, use:
 ```
 
 `/te refold` starts a background rebuild for this repository's **Pi state only**. It requires
-`microskills=envfacts`; other profiles and hosts are refused without changing learned state.
-The terminal equivalent is `te --host pi refold`. The command does not enable learning for you.
-It makes no model calls and does not change settings.
+micro-skills enabled: `envfacts`, `distiller`, or `envfacts+distiller`. `on` and its enable
+aliases (`true`, `yes`, `1`, `enable`, `enabled`) select `envfacts+distiller` as usual.
+`off` (including disable aliases) and other hosts are refused without changing learned state.
+The terminal equivalent is `te --host pi refold`. The command does not enable learning for you
+or change settings. It rebuilds using the selected profile: `envfacts` makes no model calls;
+`distiller` and the combined profile run the proposer at `microskills_propose_every` intervals,
+using the configured model, and record its costs in the rebuilt ledger. Repeating a rebuild
+can incur fresh model costs and produce different proposer facts. Costs already incurred
+cannot be rolled back if staging or publication fails.
 
 The worker replays recorded sessions oldest first, once per session ID, into fresh staging
 state. It includes ended sessions and logs quiet for at least 10 minutes. The current session

@@ -523,10 +523,10 @@ def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None, include_folded=
 
 
 def refold(ctx, exclude=()):
-    """Rebuild Pi's free learning and session ledger in staging; preserve live guard state."""
-    # ponytail: Pi/envfacts only; extend after defining safe pruning and paid-replay semantics.
-    if ctx.host.name != "pi" or ctx.config.microskills != "envfacts":
-        raise ValueError("refold requires --host pi and microskills=envfacts (no model calls)")
+    """Rebuild Pi's selected micro-skills profile and ledger; preserve live guard state."""
+    # ponytail: Pi only; define safe pruning replay before supporting other hosts.
+    if ctx.host.name != "pi" or ctx.config.microskills == "off":
+        raise ValueError("refold requires --host pi and microskills enabled")
     with ctx.store.locked("fold", timeout=0) as got:
         if not got:
             raise RuntimeError("a fold is running; try refold again when it finishes")
