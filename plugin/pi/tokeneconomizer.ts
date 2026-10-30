@@ -225,7 +225,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("te", {
-    description: "TokenEconomizer: status | microskills | config | repos (what it learned here, what it did)",
+    description: "TokenEconomizer: status | microskills | refold | config | repos (what it learned here, what it did)",
     handler: async (args, ctx) => {
       const argv = (args || "status").trim().split(/\s+/).filter(Boolean);
       // The session id lets `te status` say when this session is recorded under the repository

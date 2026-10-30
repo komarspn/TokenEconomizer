@@ -24,6 +24,7 @@
                                       now (runs by itself, once, after an upgrade)
     te repos merge KEY [INTO]         merge the state directory KEY into INTO (default: this
                                       repository's), for state whose checkouts are gone
+    te refold                         rebuild recorded Pi sessions with microskills=envfacts
     te doctor                         check the installation
     te --host copilot probe           real Copilot sessions in a throwaway repository: does a
                                       learned fact change what the model does, and what does the
@@ -111,7 +112,7 @@ def cmd_status(args):
     out = {"repo": ctx.repo.label, "repo_root": ctx.repo.root, "repo_key": ctx.repo.key,
            "identified_by": ctx.repo.how, "host": ctx.host.name,
            "state": ctx.store.base, "config": cfg.as_dict(), "warnings": cfg.warnings,
-           "session_note": _session_note(ctx)}
+           "session_note": _session_note(ctx), "refold": ctx.store.read("refold.json")}
     inj = ctx.store.read("injection.json") or {}
     unt = ctx.store.read("untool.json") or {}
     env_tracker = loopguard.load_envelope(ctx.store, cfg.loopguard_aggr,
@@ -154,6 +155,12 @@ def cmd_status(args):
           f"{accounting.fmt_tokens(ledger['effective_tokens'])} effective tokens, plugin "
           f"overhead {accounting.fmt_tokens(ledger['overhead_tokens'])} "
           f"({ledger['overhead_frac']:.1%})")
+    if out["refold"]:
+        job = out["refold"]
+        print(f"  refold       {job.get('status', 'unknown')}: "
+              f"{job.get('error') or str(job.get('sessions', 0)) + ' sessions rebuilt'}")
+        if job.get("backup"):
+            print(f"  backup       {job['backup']}")
     i = out["microskills"]
     print(f"  microskills  {i['injected_lines']} fact(s) injected at session start "
           f"({i['sessions_folded']} sessions learned from)")
@@ -513,6 +520,45 @@ def cmd_fold(args):
     return 0
 
 
+def cmd_refold(args):
+    ctx = _ctx(args)
+    if ctx.host.name != "pi" or ctx.config.microskills != "envfacts":
+        print("not changed: refold requires --host pi and microskills=envfacts (no model calls)")
+        return 1
+    if _refuse_unwritable(ctx.store.base):
+        return 1
+    prior = ctx.store.read("refold.json") or {}
+    if prior.get("status") == "publishing":
+        print(f"not changed: interrupted refold; restore backup {prior.get('backup')} first")
+        return 1
+    exclude = args.exclude_session or ctx.host.env_session_id(ctx.env)
+    if not args.run:
+        argv = ["refold", "--run"]
+        if exclude:
+            argv += ["--exclude-session", exclude]
+        if not ctx.spawn(argv, "refold.log"):
+            print("refold could not start; state unchanged")
+            return 1
+        print("refold queued in the background; check /te status and refold.log in the state "
+              "directory. The current session is excluded; facts apply to later sessions.")
+        return 0
+    with ctx.store.locked("refold", timeout=0) as got:
+        if not got:
+            print("refold is already running")
+            return 1
+        ctx.store.write("refold.json", {"status": "running", "at": time.time()})
+        try:
+            result = fold.refold(ctx, exclude=(exclude,) if exclude else ())
+        except Exception as exc:
+            result = dict(ctx.store.read("refold.json") or {}, status="failed", error=str(exc),
+                          at=time.time())
+            ctx.store.write("refold.json", result)
+            print(f"refold failed: {exc}; see /te status for any backup path")
+            return 1
+        print(f"refold completed: {result['sessions']} sessions; backup: {result['backup']}")
+        return 0
+
+
 def cmd_judge(args):
     """The detached half of the stuck judge (see plugin/judge.py); not for people."""
     from . import judge
@@ -735,6 +781,10 @@ def build_parser():
     p.add_argument("--session", action="append")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(fn=cmd_fold)
+    p = add("refold")
+    p.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
+    p.add_argument("--exclude-session", help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_refold)
     p = add("judge")
     p.add_argument("--session", required=True)
     p.add_argument("--job", required=True)

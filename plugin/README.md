@@ -297,6 +297,57 @@ This uses the configured micro-skills mode, including model calls if that mode e
 Discovery runs once per repository, not recursively through arbitrary project folders.
 See [What to expect](#what-to-expect).
 
+### Rebuild learning from recorded sessions
+
+After enabling free learning, use:
+
+```text
+/te config set microskills=envfacts
+/te refold
+/te status
+/te microskills
+```
+
+`/te refold` starts a background rebuild for this repository's **Pi state only**. It requires
+`microskills=envfacts`; other profiles and hosts are refused without changing learned state.
+The terminal equivalent is `te --host pi refold`. The command does not enable learning for you.
+It makes no model calls and does not change settings.
+
+The worker replays recorded sessions oldest first, once per session ID, into fresh staging
+state. It includes ended sessions and logs quiet for at least 10 minutes. The current session
+is excluded; recently active sessions remain pending. Pause other Pi sessions for this
+repository while rebuilding. A running fold causes the job to fail without resetting state;
+try again after that fold finishes. Check `/te status` for completion or failure and the
+backup path; `refold.log` in the state directory contains the worker's output.
+
+| State under the repository's `pi/` directory | Refold behavior |
+|---|---|
+| `folded.json` | Replaced with IDs processed by this rebuild; this is the authoritative skip list |
+| `sessions/*.json` `folded` flags | Recomputed for non-current sessions; transcript paths, turn history, and actual injection metadata are preserved |
+| `ledger.jsonl` session rows | Replaced, not appended, eliminating duplicate session usage totals |
+| `ledger.jsonl` other rows | Preserved, including separately recorded background-judge charges |
+| `injection.json`, `mechanisms/` | Rebuilt from scratch, removing stale facts, lifecycle evidence, counters, and old proposer state |
+| `pi-discovery.json`, session records and source logs | Preserved; refold reuses registered sessions, it does not rescan for unregistered logs |
+| `envelope.json`, event history, notice state, repository map, pruning state/settings | Preserved; replay does not reconstruct live guard calibration or change tools |
+
+Missing transcripts or learning errors abort the staged rebuild and leave the previous
+learning and ledger intact. No reusable facts are guaranteed. New facts apply to later
+sessions; the current conversation keeps its existing injected context. Session totals during
+a rebuild still describe the old state; after completion they describe only the sessions
+rebuilt, until pending sessions are folded normally. Historical per-session optimizer overhead
+is replaced along with session rows, not treated as a complete billing audit; the backup
+retains the original ledger.
+
+Before publication, the worker saves the old folding state and session records in
+`pi/refold-backups/refold-*/`. Repeated successful refolds replace the rebuilt state rather
+than adding evidence, but each retains a backup, which you can remove when no longer needed.
+Publication errors trigger rollback. A process kill or power loss during publication can
+interrupt rollback: `/te status` then reports `publishing` and the backup path, and normal
+folding and further refolds are blocked. With Pi and background jobs stopped, restore
+`mechanisms/`, `injection.json`, `folded.json`, `ledger.jsonl`, and `sessions/` from that backup
+(remove replacement paths first; a path absent from the backup was absent before the rebuild),
+then remove `refold.json` to unblock folding. Do not delete `folded.json` alone to replay history.
+
 **Update.** `pi update --extensions` (plain `pi update` does not update extensions).
 
 **Uninstall.** `pi remove git:github.com/microsoft/TokenEconomizer` (the source you installed

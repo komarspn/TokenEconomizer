@@ -25,12 +25,14 @@ import re
 import shutil
 import tempfile
 import time
+from dataclasses import replace
 from datetime import datetime
 
 from .. import trace
 from . import accounting, denylist, sidecall
 from . import adapter as live_adapter
 from .adapter import LiveAdapter, load_catalog
+from .store import Store
 
 STALE_S = 600           # an unfolded session whose transcript is quiet this long is over
 # A fold never runs in a hook -- it is a detached process, or `te fold` -- so it can wait for
@@ -364,6 +366,8 @@ def fold_session(ctx, session_id, transcript_path=None):
     with ctx.store.locked("fold", timeout=FOLD_LOCK_WAIT_S) as got:
         if not got:
             return None
+        if (ctx.store.read("refold.json") or {}).get("status") == "publishing":
+            return None  # An interrupted publication needs its saved backup restored first.
         folded = ctx.store.read("folded.json") or {}
         if session_id in folded:
             return None
@@ -492,10 +496,10 @@ def discover_pi_sessions(ctx, session_id, session_dir="", transcript=""):
         return count
 
 
-def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):
-    """Recorded sessions that ended (or went quiet) without being folded."""
+def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None, include_folded=False):
+    """Recorded sessions that ended (or went quiet), normally excluding folded ones."""
     now = now or time.time()
-    folded = ctx.store.read("folded.json") or {}
+    folded = {} if include_folded else ctx.store.read("folded.json") or {}
     out = []
     sess_dir = ctx.store.path("sessions")
     if not os.path.isdir(sess_dir):
@@ -516,6 +520,97 @@ def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):
             out.append((float(sess.get("started") or 0), sid))
     # Oldest first: the sessions a migration hands over are folded in the order they ran.
     return [sid for _, sid in sorted(out)]
+
+
+def refold(ctx, exclude=()):
+    """Rebuild Pi's free learning and session ledger in staging; preserve live guard state."""
+    # ponytail: Pi/envfacts only; extend after defining safe pruning and paid-replay semantics.
+    if ctx.host.name != "pi" or ctx.config.microskills != "envfacts":
+        raise ValueError("refold requires --host pi and microskills=envfacts (no model calls)")
+    with ctx.store.locked("fold", timeout=0) as got:
+        if not got:
+            raise RuntimeError("a fold is running; try refold again when it finishes")
+        with ctx.store.locked("mechanisms", timeout=0) as got:
+            if not got:
+                raise RuntimeError("learning state is busy; try refold again later")
+            sids = pending_sessions(ctx, exclude=exclude, include_folded=True)
+            if not sids:
+                raise ValueError("no ended or quiet recorded sessions to refold")
+            with tempfile.TemporaryDirectory(prefix=".refold-", dir=ctx.store.base) as temp:
+                staged = replace(ctx, store=Store(temp))
+                staged.store.ensure("mechanisms")
+                for sid in sids:
+                    name = os.path.join("sessions", f"{sid}.json")
+                    session = dict(ctx.store.read(name) or {})
+                    session.pop("folded", None)
+                    # Historical logs without injection metadata must not gain invented feedback.
+                    session.setdefault("injected_ids", [])
+                    staged.store.write(name, session)
+                    record = fold_session(staged, sid)
+                    if record is None or record.get("error"):
+                        raise RuntimeError(f"cannot refold {sid}: transcript unavailable or fold failed")
+                names = ("mechanisms", "injection.json", "folded.json", "ledger.jsonl")
+                backup = tempfile.mkdtemp(prefix="refold-", dir=ctx.store.ensure("refold-backups"))
+                # Serialize ledger replacement with late background judge charges, too.
+                with ctx.store.locked("ledger") as got:
+                    if not got:
+                        raise RuntimeError("session ledger is busy; try refold again later")
+                    for name in names:
+                        source = ctx.store.path(name)
+                        if os.path.isdir(source):
+                            shutil.copytree(source, os.path.join(backup, name))
+                        elif os.path.exists(source):
+                            shutil.copy2(source, os.path.join(backup, name))
+                    shutil.copytree(ctx.store.path("sessions"), os.path.join(backup, "sessions"))
+                    rows = [r for r in ctx.store.read_lines("ledger.jsonl")
+                            if r.get("kind") != "session"]
+                    rows += staged.store.read_lines("ledger.jsonl")
+                    with open(staged.store.path("ledger.jsonl"), "w", encoding="utf-8") as fh:
+                        for row in rows:
+                            fh.write(json.dumps(row, sort_keys=True) + "\n")
+                    ctx.store.write("refold.json", {"status": "publishing", "backup": backup})
+                    changed = []
+                    session_changes = []
+                    try:
+                        for name in names:
+                            changed.append(name)
+                            target = ctx.store.path(name)
+                            if os.path.isdir(target):
+                                shutil.rmtree(target)
+                            if os.path.exists(staged.store.path(name)):
+                                os.replace(staged.store.path(name), target)
+                            elif os.path.exists(target):
+                                os.remove(target)
+                        for name in os.listdir(ctx.store.path("sessions")):
+                            if not name.endswith(".json") or name[:-5] in exclude:
+                                continue
+                            relative = os.path.join("sessions", name)
+                            session = ctx.store.read(relative)
+                            if not isinstance(session, dict):
+                                continue
+                            session_changes.append(name)
+                            session["folded"] = name[:-5] in sids
+                            ctx.store.write(relative, session)
+                    except BaseException:
+                        for name in changed:
+                            target = ctx.store.path(name)
+                            if os.path.isdir(target):
+                                shutil.rmtree(target)
+                            elif os.path.exists(target):
+                                os.remove(target)
+                            saved = os.path.join(backup, name)
+                            if os.path.isdir(saved):
+                                shutil.copytree(saved, target)
+                            elif os.path.exists(saved):
+                                shutil.copy2(saved, target)
+                        for name in session_changes:
+                            shutil.copy2(os.path.join(backup, "sessions", name),
+                                         ctx.store.path("sessions", name))
+                        raise
+                result = {"status": "completed", "sessions": len(sids), "backup": backup,
+                          "at": time.time()}
+                ctx.store.write("refold.json", result)
+                return result
 
 
 def spawn_fold(ctx, session_ids):

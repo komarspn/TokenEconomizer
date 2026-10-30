@@ -1054,6 +1054,142 @@ def test_pi_discovery_uses_the_existing_background_fold(env, repo, tmp_path, mon
     assert not ctx.store.read("folded.json")
 
 
+def test_refold_replaces_learning_and_duplicate_ledger_rows(env, repo, tmp_path):
+    from tokeneconomizer.plugin import accounting
+
+    for i in range(4):
+        path = pi_trap_session(str(tmp_path / f"old{i}.jsonl"), repo, i)
+        run_session(dict(env, TE_MICROSKILLS="off"), repo, f"pi{i}", path, host="pi")
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    st = ctx.store
+    old = st.read_lines("ledger.jsonl")
+    expected_usage = accounting.summarize(old)["effective_tokens"]
+    st.append("ledger.jsonl", old[0])
+    st.append("ledger.jsonl", old[0])
+    charge = {"kind": "overhead", "job": "real-judge-call", "overhead": {"spiral_judge_tokens": 7}}
+    st.append("ledger.jsonl", charge)
+    st.write("injection.json", {"rendered": "stale facts", "sessions": 999})
+    st.write("mechanisms/stale.json", {"stale": True})
+    preserved = {"pi-discovery.json": {"at": 123}, "envelope.json": {"turns": [1]},
+                 "notices.json": {"injection": "old-hash"}, "untool.json": {"untouched": True}}
+    for name, value in preserved.items():
+        st.write(name, value)
+    result = fold.refold(ctx)
+    assert result["sessions"] == 4
+    assert os.path.isdir(result["backup"])
+    assert len(Store(result["backup"]).read_lines("ledger.jsonl")) == 7
+    assert not os.path.exists(st.path("mechanisms/stale.json"))
+    assert st.read("injection.json")["sessions"] == 4
+    assert "python -m pytest" in st.read("injection.json")["rendered"]
+    rows = st.read_lines("ledger.jsonl")
+    assert len(rows) == 5 and rows.count(charge) == 1
+    assert accounting.summarize(rows)["effective_tokens"] == expected_usage
+    assert set(st.read("folded.json")) == {f"pi{i}" for i in range(4)}
+    assert all(st.read(f"sessions/pi{i}.json")["folded"] for i in range(4))
+    for name, value in preserved.items():
+        assert st.read(name) == value
+    learned = st.read("injection.json")["facts"]
+    fold.refold(ctx)
+    assert st.read("injection.json")["facts"] == learned
+    assert st.read("injection.json")["sessions"] == 4
+    assert len(st.read_lines("ledger.jsonl")) == 5
+    assert accounting.summarize(st.read_lines("ledger.jsonl"))["effective_tokens"] == expected_usage
+
+
+def test_refold_excludes_current_and_recent_sessions(env, repo, tmp_path):
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    for i in range(3):
+        path = pi_trap_session(str(tmp_path / f"p{i}.jsonl"), repo, i)
+        ctx.store.write(f"sessions/pi{i}.json", {"transcript": path, "started": i, "folded": True})
+    os.utime(str(tmp_path / "p0.jsonl"), (1, 1))
+    os.utime(str(tmp_path / "p1.jsonl"), (1, 1))
+    result = fold.refold(ctx, exclude=("pi1",))
+    assert result["sessions"] == 1
+    assert set(ctx.store.read("folded.json")) == {"pi0"}
+    assert ctx.store.read("sessions/pi2.json")["folded"] is False
+    assert ctx.store.read("sessions/pi1.json")["folded"] is True  # Current record is untouched.
+
+
+@pytest.mark.parametrize("failure", ["missing", "learning"])
+def test_refold_failure_before_publish_leaves_state_unchanged(env, repo, tmp_path, monkeypatch, failure):
+    path = pi_trap_session(str(tmp_path / "old.jsonl"), repo, 1)
+    run_session(env, repo, "pi1", path, host="pi")
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    files = ["folded.json", "ledger.jsonl", "injection.json", "sessions/pi1.json"]
+    before = {name: open(ctx.store.path(name), "rb").read() for name in files}
+    if failure == "missing":
+        os.remove(path)
+    else:
+        def fail(*args, **kwargs):
+            raise RuntimeError("simulated learning failure")
+        monkeypatch.setattr(fold, "_fold_microskills", fail)
+    with pytest.raises(RuntimeError):
+        fold.refold(ctx)
+    assert {name: open(ctx.store.path(name), "rb").read() for name in files} == before
+
+
+def test_refold_rolls_back_publication_errors(env, repo, tmp_path, monkeypatch):
+    path = pi_trap_session(str(tmp_path / "old.jsonl"), repo, 1)
+    run_session(env, repo, "pi1", path, host="pi")
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    files = ["folded.json", "ledger.jsonl", "injection.json", "sessions/pi1.json"]
+    before = {name: open(ctx.store.path(name), "rb").read() for name in files}
+    replace = os.replace
+
+    def fail(source, target):
+        if os.path.basename(source) == "folded.json" and os.path.dirname(source) != ctx.store.base:
+            raise OSError("simulated publish failure")
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail)
+    with pytest.raises(OSError, match="simulated publish failure"):
+        fold.refold(ctx)
+    assert {name: open(ctx.store.path(name), "rb").read() for name in files} == before
+
+
+def test_refold_cli_queues_and_reports_completion(env, repo, tmp_path, monkeypatch, capsys):
+    from tokeneconomizer.plugin import cli
+
+    path = pi_trap_session(str(tmp_path / "old.jsonl"), repo, 1)
+    run_session(env, repo, "pi1", path, host="pi")
+    monkeypatch.setattr(os, "environ", dict(env, TE_SESSION_ID="current"))
+    spawned = []
+    monkeypatch.setattr(LiveContext, "spawn", lambda self, argv, log: spawned.append((argv, log)) or True)
+    argv = ["--host", "pi", "--cwd", repo, "refold"]
+    assert cli.main(argv) == 0
+    assert spawned == [(["refold", "--run", "--exclude-session", "current"], "refold.log")]
+    assert cli.main(argv + ["--run"]) == 0
+    assert "refold completed: 1 sessions" in capsys.readouterr().out
+    assert cli.main(["--host", "pi", "--cwd", repo, "status", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["refold"]["status"] == "completed"
+    st = store_for(env, repo, "pi")
+    st.write("refold.json", {"status": "publishing", "backup": "saved-state"})
+    assert cli.main(argv) == 1
+    assert "restore backup saved-state" in capsys.readouterr().out
+    assert fold.fold_session(LiveContext.build(hosts.Pi(), repo, env), "new", path) is None
+
+
+@pytest.mark.parametrize("profile,host", [("off", "pi"), ("envfacts+distiller", "pi"),
+                                         ("envfacts", "claude")])
+def test_refold_rejects_unsupported_modes_without_reset(env, repo, monkeypatch, profile, host):
+    from tokeneconomizer.plugin import cli
+
+    monkeypatch.setattr(os, "environ", dict(env, TE_MICROSKILLS=profile))
+    st = store_for(env, repo, host)
+    st.write("folded.json", {"keep": True})
+    assert cli.main(["--host", host, "--cwd", repo, "refold"]) == 1
+    assert st.read("folded.json") == {"keep": True}
+    assert st.read("refold.json") is None
+
+
+def test_refold_refuses_a_busy_fold(env, repo):
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    with ctx.store.locked("fold") as got:
+        assert got
+        with pytest.raises(RuntimeError, match="a fold is running"):
+            fold.refold(ctx)
+
+
 def test_pi_print_mode_counts_as_headless_for_the_stop_hint(env, repo):
     """Pi says its mode through the extension (`TE_PI_MODE`); a print-mode notice names the
     headless way to stop."""

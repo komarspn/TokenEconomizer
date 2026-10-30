@@ -82,8 +82,12 @@ class Store:
     def append(self, name, record):
         target = self.path(name)
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, sort_keys=True) + "\n")
+        lock = self.locked("ledger") if name == "ledger.jsonl" else contextlib.nullcontext(True)
+        with lock as got:
+            if not got:
+                raise TimeoutError("session ledger is busy")
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, sort_keys=True) + "\n")
 
     def read_lines(self, name, limit=None):
         """Records of a JSONL log, oldest first; the last `limit` when given."""
