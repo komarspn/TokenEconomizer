@@ -19,10 +19,13 @@ Each session is folded once, at its first end, keyed by session id; a resumed se
 re-folded, because counting the same trajectory twice would hand the fact lifecycle confirmations
 it did not earn.
 """
+import json
 import os
+import re
 import shutil
 import tempfile
 import time
+from datetime import datetime
 
 from .. import trace
 from . import accounting, denylist, sidecall
@@ -423,6 +426,70 @@ def fold_session(ctx, session_id, transcript_path=None):
             return record
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
+
+
+def discover_pi_sessions(ctx, session_id, session_dir="", transcript=""):
+    """Register existing Pi logs once per repository; the normal quiet-time fold follows."""
+    if ctx.host.name != "pi" or ctx.store.read("pi-discovery.json"):
+        return 0
+    with ctx.store.locked("pi-discovery", timeout=0) as got:
+        if not got or ctx.store.read("pi-discovery.json"):
+            return 0
+        root = os.path.realpath(ctx.repo.root)
+        directories = {root, os.path.join(root, ".pi", "sessions")}
+        if session_dir:
+            directories.add(os.path.realpath(session_dir))
+        elif transcript:
+            directories.add(os.path.dirname(os.path.realpath(transcript)))
+        folded = ctx.store.read("folded.json") or {}
+        count, complete = 0, True
+        for directory in sorted(directories):
+            try:
+                entries = list(os.scandir(directory))
+            except FileNotFoundError:
+                continue
+            except OSError:
+                complete = False
+                continue
+            for entry in sorted(entries, key=lambda e: e.name):
+                if not entry.name.endswith(".jsonl"):
+                    continue
+                try:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    if transcript and os.path.realpath(entry.path) == os.path.realpath(transcript):
+                        continue
+                    with open(entry.path, encoding="utf-8") as fh:
+                        header = json.loads(fh.readline(65536))
+                    if not isinstance(header, dict) or header.get("type") != "session":
+                        continue
+                    sid, cwd = header.get("id"), header.get("cwd")
+                    if (not isinstance(sid, str) or not re.fullmatch(r"[\w-]+", sid)
+                            or sid == session_id or sid in folded
+                            or not isinstance(cwd, str) or not os.path.isabs(cwd)
+                            or os.path.commonpath([root, os.path.realpath(cwd)]) != root):
+                        continue
+                    name = os.path.join("sessions", f"{sid}.json")
+                    if ctx.store.read(name) is not None:
+                        continue
+                    modified = entry.stat().st_mtime
+                    try:
+                        started = datetime.fromisoformat(
+                            header.get("timestamp", "").replace("Z", "+00:00")).timestamp()
+                    except (ValueError, TypeError, AttributeError, OverflowError):
+                        started = modified
+                except (ValueError, UnicodeError):
+                    continue
+                except OSError:
+                    complete = False
+                    continue
+                ctx.store.write(name, {"session_id": sid, "host": "pi", "cwd": cwd,
+                                       "transcript": os.path.abspath(entry.path),
+                                       "started": started, "updated": modified, "turns": []})
+                count += 1
+        if complete:
+            ctx.store.write("pi-discovery.json", {"at": time.time(), "sessions": count})
+        return count
 
 
 def pending_sessions(ctx, exclude=(), stale_s=STALE_S, now=None):

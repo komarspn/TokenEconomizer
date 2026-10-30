@@ -959,6 +959,101 @@ def test_pi_learns_from_its_own_session_files_and_injects_at_the_next_start(env,
     assert rec["requests"] == 3 and rec["priced_by"] == "model"
 
 
+@pytest.mark.parametrize("location", ["root", "local", "resolved", "transcript"])
+def test_pi_first_start_discovers_old_logs_once(env, repo, tmp_path, location):
+    directory = {"root": repo, "local": os.path.join(repo, ".pi", "sessions"),
+                 "resolved": str(tmp_path / "custom"),
+                 "transcript": str(tmp_path / "sessions")}[location]
+    os.makedirs(directory, exist_ok=True)
+    for i in range(4):
+        path = pi_trap_session(os.path.join(directory, f"old{i}.jsonl"), repo, i)
+        os.utime(path, (1, 1))
+    current = pi_trap_session(os.path.join(directory, "current.jsonl"), repo, 99)
+    payload = {"session_id": "pi99", "cwd": repo, "transcript_path": current,
+               "hook_event_name": "SessionStart"}
+    if location == "resolved":
+        payload["session_dir"] = directory
+    result = call(env, payload, "pi")
+    assert "discovered 4 previous Pi session(s)" in result["systemMessage"]
+    st = store_for(env, repo, "pi")
+    assert set(st.read("folded.json")) == {f"pi{i}" for i in range(4)}
+    assert len(st.read_lines("ledger.jsonl")) == 4
+    next_start = call(env, dict(payload, session_id="next"), "pi")
+    assert "`python -m pytest …` works." in next_start["hookSpecificOutput"]["additionalContext"]
+    assert "discovered" not in next_start.get("systemMessage", "")
+    late = pi_trap_session(os.path.join(directory, "late.jsonl"), repo, 100)
+    os.utime(late, (1, 1))
+    call(env, payload, "pi")
+    assert st.read("sessions/pi100.json") is None
+    assert len(st.read_lines("ledger.jsonl")) == 4
+    call(env, dict(payload, hook_event_name="SessionEnd"), "pi")
+    assert "pi99" in st.read("folded.json")  # Normal shutdown still folds the current log.
+
+
+def test_pi_discovery_filters_headers_and_defers_recent_logs(env, repo, tmp_path):
+    directory = tmp_path / "shared"
+    directory.mkdir()
+    for name, header in {
+        "foreign": {"type": "session", "id": "foreign", "cwd": repo + "-other"},
+        "unsafe": {"type": "session", "id": "../../escape", "cwd": repo},
+        "relative": {"type": "session", "id": "relative", "cwd": "."},
+        "wrong-type": {"type": "message", "id": "message", "cwd": repo},
+        "array": [],
+    }.items():
+        (directory / f"{name}.jsonl").write_text(json.dumps(header) + "\n")
+    (directory / "broken.jsonl").write_text("not JSON\n")
+    (directory / "binary.jsonl").write_bytes(b"\xff\n")
+    recent = pi_trap_session(str(directory / "recent.jsonl"), repo, 1)
+    old = pi_trap_session(str(directory / "old.jsonl"), repo, 2)
+    os.utime(old, (1, 1))
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    existing = {"session_id": "pi2", "transcript": old, "started": 42, "turns": []}
+    ctx.store.write("sessions/pi2.json", existing)
+    assert fold.discover_pi_sessions(ctx, "current", str(directory)) == 1
+    assert ctx.store.read("sessions/pi2.json") == existing
+    assert sorted(os.listdir(ctx.store.path("sessions"))) == ["pi1.json", "pi2.json"]
+    assert fold.pending_sessions(ctx) == ["pi2"]
+    os.utime(recent, (1, 1))
+    assert set(fold.pending_sessions(ctx)) == {"pi1", "pi2"}
+
+
+def test_pi_discovery_retries_io_errors_without_blocking_existing_recovery(
+        env, repo, tmp_path, monkeypatch):
+    directory = tmp_path / "logs"
+    directory.mkdir()
+    path = pi_trap_session(str(directory / "old.jsonl"), repo, 1)
+    os.utime(path, (1, 1))
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    scandir = os.scandir
+
+    def denied(path):
+        if str(path) == str(directory):
+            raise PermissionError("unreadable session directory")
+        return scandir(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "scandir", denied)
+        assert fold.discover_pi_sessions(ctx, "current", str(directory)) == 0
+        assert ctx.store.read("pi-discovery.json") is None
+    assert fold.discover_pi_sessions(ctx, "current", str(directory)) == 1
+    assert fold.pending_sessions(ctx) == ["pi1"]
+    other = LiveContext.build(hosts.ClaudeCode(), repo, env)
+    assert fold.discover_pi_sessions(other, "current", str(directory)) == 0
+    assert other.store.read("pi-discovery.json") is None
+
+
+def test_pi_discovery_uses_the_existing_background_fold(env, repo, tmp_path, monkeypatch):
+    path = pi_trap_session(str(tmp_path / "old.jsonl"), repo, 1)
+    os.utime(path, (1, 1))
+    ctx = LiveContext.build(hosts.Pi(), repo, dict(env, TE_FOLD_SYNC="0"))
+    spawned = []
+    monkeypatch.setattr(ctx, "spawn", lambda argv, log: spawned.append((argv, log)))
+    LiveController(ctx, {"session_id": "new", "cwd": repo, "session_dir": str(tmp_path),
+                         "hook_event_name": "SessionStart"}).handle()
+    assert (["fold", "--session", "pi1"], "fold.log") in spawned
+    assert not ctx.store.read("folded.json")
+
+
 def test_pi_print_mode_counts_as_headless_for_the_stop_hint(env, repo):
     """Pi says its mode through the extension (`TE_PI_MODE`); a print-mode notice names the
     headless way to stop."""

@@ -169,6 +169,12 @@ class LiveController:
         repos.note_repo(self.ctx.root, self.ctx.repo)
         repos.prune_pins(self.ctx.root, self.host.name)
         repos.start_migration(self.ctx)
+        discovered = fold.discover_pi_sessions(
+            self.ctx, self.sid, self.p.get("session_dir") or "", self.host.transcript(self.p))
+        if discovered:
+            outputs.append(self.host.notice(
+                f"TokenEconomizer: discovered {discovered} previous Pi session(s); "
+                "quiet sessions are queued for background learning."))
         fold.spawn_fold(self.ctx, fold.pending_sessions(self.ctx, exclude=(self.sid,)))
         return merge_outputs(*outputs)
 

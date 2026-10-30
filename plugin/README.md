@@ -287,7 +287,15 @@ tools. In print and JSON modes the plugin's notices go to stderr. A turn that is
 after the loop guard's redirect gets a notice: press **Esc** to abort it, or Ctrl+C to end a
 `pi -p` run (a command Pi started then runs on until it finishes).
 
-**3. Work normally.** See [What to expect](#what-to-expect).
+**3. Work normally.** On the first startup for a repository, the plugin discovers previous
+Pi JSONL sessions in Pi's resolved session directory (including custom session directories),
+the project root, and `.pi/sessions/`. Only logs whose header names this checkout or a
+subdirectory are registered; the current session and already recorded sessions are skipped.
+Logs quiet for at least 10 minutes join the existing background learning process; recently
+modified logs remain pending for a later startup. Learned facts are available to later sessions.
+This uses the configured micro-skills mode, including model calls if that mode enables them.
+Discovery runs once per repository, not recursively through arbitrary project folders.
+See [What to expect](#what-to-expect).
 
 **Update.** `pi update --extensions` (plain `pi update` does not update extensions).
 
