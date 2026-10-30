@@ -153,6 +153,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   let manual = "";
   let prompts = 0;
   let turn = "";
+  let modelRegistry: ExtensionContext["modelRegistry"] | undefined;
 
   const base = (ctx: ExtensionContext) => ({
     session_id: ctx.sessionManager.getSessionId(),
@@ -161,6 +162,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    modelRegistry = ctx.modelRegistry;
     prompts = 0;
     const entries = (ctx.sessionManager.getBranch?.() ?? []) as any[];
     const carried = entries.some((e) => e?.type === "message");
@@ -235,6 +237,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
         untool: "Alias for toolprune",
         config: "Show or change settings",
         fold: "Learn from finished sessions",
+        history: "Import or inspect earlier sessions",
         refold: "Rebuild learned state from recorded sessions",
         judge: "Judge a recorded session",
         doctor: "Check installation and diagnostics",
@@ -247,6 +250,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
         config: ["show", "set", "unset"],
         repos: ["list", "migrate", "merge"],
         repomap: ["show", "refresh"],
+        history: ["status", "import"],
       };
       const flags: Record<string, string[]> = {
         status: ["--json"],
@@ -272,6 +276,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
           mode: ["auto", "interactive", "headless"],
           microskills: ["off", "envfacts", "envfacts+distiller", "distiller", "on"],
           microskills_max_facts: [], microskills_max_tokens: [], microskills_propose_every: [],
+          microskills_model: [],
           toolprune: ["off", "propose", "auto", "on"],
           toolprune_evidence: [], toolprune_min_sessions: [], toolprune_sessions: [],
           toolprune_quiet_minutes: [], toolprune_protect: [],
@@ -279,6 +284,14 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
           loopguard_aggr: ["conservative", "default", "aggressive"], loopguard_nudges: [],
           repomap: ["off", "on", "start"],
           repomap_tokens: [], repomap_python: [], repomap_timeout: [], paid_model: [],
+          claude_paid_model: [], codex_paid_model: [], copilot_paid_model: [], pi_paid_model: [],
+          opencode_paid_model: [], cursor_paid_model: [], grok_paid_model: [], hermes_paid_model: [],
+          droid_paid_model: [],
+          claude_paid_effort: ["", "low", "medium", "high", "xhigh", "max"],
+          codex_paid_effort: ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+          local_model: ["off", "fm"], local_roles: [], local_judge_confidence: [],
+          pi_extensions: [], pi_cli: [], hermes_cli: [], droid_sidecall: ["true", "false"],
+          history_import: ["true", "false"], history_max_sessions: [], history_days: [], history_dirs: [],
           shadow: ["true", "false"], vocabulary: ["auto", "generic", "python-git", "node-web"],
         };
         const aliases: Record<string, string> = {
@@ -301,7 +314,10 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
         } else if (partial.includes("=")) {
           const key = partial.split("=", 1)[0];
           if (Object.hasOwn(settings, key)) {
-            options.push(...settings[key].map((value) => `${key}=${value}`));
+            const values = key === "microskills_model"
+              ? (modelRegistry?.getAvailable() ?? []).map((model) => `${model.provider}/${model.id}`)
+              : settings[key];
+            options.push(...values.map((value) => `${key}=${value}`));
           }
         } else {
           options.push(...Object.keys(settings).map((key) => `${key}=`));

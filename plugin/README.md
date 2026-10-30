@@ -944,8 +944,18 @@ first session there ends.
 | `local_judge_confidence` | `0.9` | how sure a stuck verdict from the on-device judge must be to count; below it the turn is spared |
 | `pi_extensions` | `""` | Pi only: extension files (comma-separated paths) the plugin's own calls load, for a model whose provider an extension registers |
 | `pi_cli` | `""` | Pi only: the `pi` the plugin's own calls run; empty: the first on PATH |
+| `microskills_model` | `""` | model for micro-skills only; empty inherits the configured side-call model. On Pi, use `provider/model-id` to pin the provider too |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
+
+Set the micro-skills model with `/te config set microskills_model=provider/model-id` on Pi
+(or `te config set microskills_model=MODEL` in a terminal). This saves it in the repository's
+`config.json`; add `--global` to save it in `~/.tokeneconomizer/config.json` instead.
+`TE_MICROSKILLS_MODEL` overrides the saved choice. `config unset microskills_model` removes
+the override. This setting does not change the loop guard's model or enable micro-skills,
+and saving it makes no model call. In Pi, typing `microskills_model=` offers available
+models as `provider/model-id`, in either scope; further typing filters the suggestions.
+Submitting the empty value still saves `""`, meaning inherit `paid_model`.
 
 **Where settings live, and when they apply.** For one session, an environment variable wins:
 `TE_` plus the setting's name in capitals (`TE_MICROSKILLS`, `TE_TOOLPRUNE_EVIDENCE`,

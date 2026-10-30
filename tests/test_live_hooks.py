@@ -160,8 +160,10 @@ def test_micro_skills_is_off_by_default_and_learns_nothing(env, repo, tmp_path, 
     assert "`config set microskills=on` turns it on" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("model", ["", "custom-microskills-model"])
+@pytest.mark.parametrize("host_model", ["", "host-model"])
 def test_micro_skills_on_runs_the_proposer_without_paid_and_charges_it(
-        env, repo, tmp_path, monkeypatch):
+        env, repo, tmp_path, monkeypatch, model, host_model):
     """`on` is the experiments' micro-skills: the free facts plus the proposer, here every
     third session (after the 2nd, 5th, ...), as a session carries more work than a benchmark
     task. Turning it on is what allows the proposer's model call; `paid` is the loop guard's."""
@@ -172,11 +174,14 @@ def test_micro_skills_on_runs_the_proposer_without_paid_and_charges_it(
         models.append(model)
         return "{}", 120.0
     monkeypatch.setattr(sidecall, "claude_call", fake_call)
+    from tokeneconomizer.plugin.config import write_config
+    config_path = os.path.join(os.path.dirname(store_for(env, repo).base), "config.json")
+    write_config(config_path, {"microskills_model": model, "claude_paid_model": host_model})
     on = dict(env, TE_MICROSKILLS="on")
     for i in range(5):
         run_session(on, repo, f"s{i}", trap_session(str(tmp_path / f"s{i}.jsonl"), repo, i))
     ledger = store_for(on, repo).read_lines("ledger.jsonl")
-    assert models == ["haiku", "haiku"]
+    assert models == [model or host_model or "haiku"] * 2
     assert [r["overhead"]["optimizer_tokens"] for r in ledger] == [0, 120.0, 0, 0, 120.0]
     assert store_for(on, repo).read("injection.json")["profile"] == "envfacts+distiller"
 
@@ -1312,7 +1317,7 @@ def test_refold_cli_queues_and_reports_completion(env, repo, tmp_path, monkeypat
         calls.append((prompt, model))
         return "{}", 120.0
 
-    monkeypatch.setattr(sidecall, "runner_for", lambda *args: runner)
+    monkeypatch.setattr(sidecall, "runner_for", lambda *args, **kwargs: runner)
     for i in range(5):
         path = pi_trap_session(str(tmp_path / f"old{i}.jsonl"), repo, i)
         run_session(dict(env, TE_MICROSKILLS="off"), repo, f"pi{i}", path, host="pi")

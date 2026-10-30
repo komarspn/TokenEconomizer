@@ -88,9 +88,15 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None, imported
     # layer learns from it, and the proposer waits for sessions the plugin sees end.
     runner = None
     if icfg.paid and not imported:
-        runner = (sidecall.runner_for(ctx.host.name, ctx.config, role="proposer")
+        config = ctx.config
+        if config.microskills_model:
+            overrides = {"paid_model": config.microskills_model}
+            if hasattr(config, f"{ctx.host.name}_paid_model"):
+                overrides[f"{ctx.host.name}_paid_model"] = config.microskills_model
+            config = replace(config, **overrides)
+        runner = (sidecall.runner_for(ctx.host.name, config, role="proposer")
                   if not sidecall.paused(ctx.host.name, ctx.root)
-                  else sidecall.local_runner("proposer", ctx.config))
+                  else sidecall.local_runner("proposer", config))
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)
     srow = {"resolved": None}
