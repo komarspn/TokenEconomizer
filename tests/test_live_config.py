@@ -73,6 +73,40 @@ def test_the_repository_file_beats_the_global_one_and_the_environment_beats_both
     assert not cfg.warnings
 
 
+def test_microskills_model_is_persisted_layered_and_unset_without_changing_guard(tmp_path, monkeypatch):
+    from tokeneconomizer.plugin import sidecall
+    from tokeneconomizer.plugin.cli import _config_view
+
+    root, repo_dir = tmp_path / "root", tmp_path / "repo"
+    path = str(repo_dir / "config.json")
+    write_config(str(root / "config.json"), {"paid_model": "guard-model",
+                                            "microskills_model": "provider/global-model"})
+    write_config(path, {"microskills_model": "provider/repo-model"})
+    assert json.loads((repo_dir / "config.json").read_text()) == {
+        "microskills_model": "provider/repo-model"}
+    cfg = load_config(str(root), str(repo_dir), env={})
+    assert cfg.microskills_model == "provider/repo-model"
+    assert _config_view(cfg)["microskills"]["microskills_model"] == cfg.microskills_model
+    assert cfg.microskills == "off"
+    monkeypatch.setattr(sidecall, "pi_call", lambda prompt, model: (model, 0))
+    assert sidecall.runner_for("pi", cfg)("judge")[0] == "guard-model"
+    assert load_config(str(root), str(repo_dir), env={
+        "TE_MICROSKILLS_MODEL": "provider/env-model"}).microskills_model == "provider/env-model"
+    write_config(path, {"microskills_model": ""})
+    assert load_config(str(root), str(repo_dir), env={}).microskills_model == ""
+    unset_config(path, ["microskills_model"])
+    assert load_config(str(root), str(repo_dir), env={}).microskills_model == "provider/global-model"
+
+
+@pytest.mark.parametrize("value", [None, 42, True, [], {}, "two models", "-flag", "a\nb"])
+def test_invalid_microskills_model_never_overwrites_saved_settings(tmp_path, value):
+    path = str(tmp_path / "config.json")
+    write_config(path, {"microskills_model": "provider/model"})
+    with pytest.raises(ValueError):
+        write_config(path, {"microskills_model": value})
+    assert load_config(str(tmp_path), env={}).microskills_model == "provider/model"
+
+
 def test_the_names_before_the_rename_still_work(tmp_path):
     """`inject`, `untool`, `spiral` and their settings and variables are read as the new names;
     a file holding both spellings takes the new one; writing a setting stores its new name and

@@ -471,6 +471,58 @@ console.log(JSON.stringify(results));
         assert results[prefix] is None
 
 
+def test_pi_te_completes_microskills_models_from_the_live_registry():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    ext = os.path.join(PLUGIN, "pi", "tokeneconomizer.ts")
+    script = """
+const assert = (await import("node:assert/strict")).default;
+const { pathToFileURL } = await import("node:url");
+const { default: extension } = await import(pathToFileURL(process.argv[1]).href);
+let command;
+const handlers = {};
+extension({ on(name, handler) { handlers[name] = handler; }, registerCommand(name, spec) {
+  if (name === "te") command = spec;
+} });
+const complete = async (prefix) => (await command.getArgumentCompletions(prefix) ?? [])
+  .map(({ value }) => value);
+assert.deepEqual(await complete("config set microskills_model="), []);
+let models = [
+  { provider: "anthropic", id: "claude-haiku-4-5" },
+  { provider: "openrouter", id: "anthropic/claude-haiku-4.5" },
+];
+process.env.TE_DISABLE = "1"; // No hook subprocesses or user-state writes in this test.
+await handlers.session_start({ reason: "startup" }, {
+  modelRegistry: { getAvailable: () => models },
+  sessionManager: { getSessionId: () => "test", getSessionFile: () => undefined },
+  cwd: "/tmp", mode: "json", hasUI: false,
+});
+for (const head of ["config set", "config set --global", "config --global set",
+                    "config set shadow=true", "config --cwd /tmp set"]) {
+  const prefix = `${head} microskills_model=`;
+  assert.deepEqual(await complete(prefix), models.map((m) => `${prefix}${m.provider}/${m.id}`));
+  assert.deepEqual(await complete(`${prefix}openrouter/anthropic/`),
+    [`${prefix}openrouter/anthropic/claude-haiku-4.5`]);
+  assert.deepEqual(await complete(`${prefix}not-available`), []);
+}
+assert.deepEqual(await complete("config unset --global microskills_model"),
+  ["config unset --global microskills_model"]);
+assert.deepEqual(await complete("config set --global paid_model="), []);
+models = [{ provider: "local", id: "new-model" }];
+assert.deepEqual(await complete("config set microskills_model="),
+  ["config set microskills_model=local/new-model"]);
+models = [];
+assert.deepEqual(await complete("config set --global microskills_model="), []);
+"""
+    run = subprocess.run([node, "--experimental-strip-types", "--no-warnings",
+                          "--input-type=module", "-e", script, ext],
+                         capture_output=True, text=True, timeout=60)
+    if run.returncode and "strip-types" in run.stderr:
+        pytest.skip("this node cannot load TypeScript")
+    assert run.returncode == 0, run.stderr
+
+
 def test_the_plugin_directory_is_also_a_pi_package():
     """One directory, three agents: Pi loads the extension its `pi` manifest names, and that
     extension drives the same launchers the Claude Code and Codex hooks run."""

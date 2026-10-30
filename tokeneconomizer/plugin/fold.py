@@ -80,7 +80,8 @@ def _fold_microskills(ctx, adapter, run_dir, session_id, injected=None):
                            max_tokens=ctx.config.microskills_max_tokens)
     # Paused once the host's CLI said it is not signed in (`sidecall.paused`): the free layer
     # still learns.
-    runner = (sidecall.runner_for(ctx.host.name, ctx.config)
+    runner = (sidecall.runner_for(ctx.host.name, replace(
+                  ctx.config, paid_model=ctx.config.microskills_model or ctx.config.paid_model))
               if icfg.paid and not sidecall.paused(ctx.host.name, ctx.root) else None)
     stage = PrefixStage(icfg, ctx.repo.label, ctx.mech_dir, False, runner=runner,
                         optimizer_model="agent", adapter=adapter, agent=ctx.host.name)

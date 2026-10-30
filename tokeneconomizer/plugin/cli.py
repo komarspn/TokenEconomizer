@@ -440,6 +440,7 @@ def _config_view(cfg):
         "enabled": d.pop("enabled"),
         "microskills": {"state": "off" if cfg.microskills == "off" else "on",
                         "microskills": d.pop("microskills"),
+                        "microskills_model": d.pop("microskills_model"),
                         "microskills_max_facts": d.pop("microskills_max_facts"),
                         "microskills_max_tokens": d.pop("microskills_max_tokens"),
                         "microskills_propose_every": d.pop("microskills_propose_every")},

@@ -146,6 +146,7 @@ class LiveConfig:
     microskills_max_facts: int = 4
     microskills_max_tokens: int = 150
     microskills_propose_every: int = 3
+    microskills_model: str = ""
     toolprune: str = "auto"
     toolprune_evidence: int = 10
     toolprune_min_sessions: int = 2
@@ -201,6 +202,10 @@ class LiveConfig:
                 value = "off"
             else:
                 value = _VALUE_ALIASES.get(key, {}).get(word, value)
+        if key == "microskills_model" and (not isinstance(value, str) or
+                any(c.isspace() for c in value.strip()) or value.strip().startswith("-")):
+            self.warnings.append(f"{source}: microskills_model must be a model ID or an empty string")
+            return False
         cur = getattr(self, key)
         try:
             if isinstance(cur, list):
@@ -262,6 +267,7 @@ _ENV = {"TE_MODE": "mode", "TE_SHADOW": "shadow",
         "TE_MICROSKILLS": "microskills", "TE_MICROSKILLS_MAX_FACTS": "microskills_max_facts",
         "TE_MICROSKILLS_MAX_TOKENS": "microskills_max_tokens",
         "TE_MICROSKILLS_PROPOSE_EVERY": "microskills_propose_every",
+        "TE_MICROSKILLS_MODEL": "microskills_model",
         "TE_TOOLPRUNE": "toolprune", "TE_TOOLPRUNE_EVIDENCE": "toolprune_evidence",
         "TE_TOOLPRUNE_QUIET_MINUTES": "toolprune_quiet_minutes",
         "TE_TOOLPRUNE_MIN_SESSIONS": "toolprune_min_sessions",

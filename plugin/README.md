@@ -586,9 +586,19 @@ of the preset. A value you set with `loopguard.<name>` wins over both. Defaults 
 
 | Key | Default | Values |
 |---|---|---|
-| `paid_model` | `""` | model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
+| `microskills_model` | `""` | model for micro-skills only; empty inherits `paid_model`. On Pi, use `provider/model-id` to pin the provider too |
+| `paid_model` | `""` | default model for the plugin's own calls; empty: `haiku` on Claude Code, the agent's own default model on Codex and Pi, on Copilot `COPILOT_PROVIDER_MODEL_ID` or `COPILOT_MODEL` (unless it is `auto`), else a BYOK provider's Haiku, else Copilot's own default |
 | `shadow` | `false` | decide and log everything, act on nothing |
 | `mode` | `auto` | `interactive` or `headless` to override what the plugin detects |
+
+Set the micro-skills model with `/te config set microskills_model=provider/model-id` on Pi
+(or `te config set microskills_model=MODEL` in a terminal). This saves it in the repository's
+`config.json`; add `--global` to save it in `~/.tokeneconomizer/config.json` instead.
+`TE_MICROSKILLS_MODEL` overrides the saved choice. `config unset microskills_model` removes
+the override. This setting does not change the loop guard's model or enable micro-skills,
+and saving it makes no model call. In Pi, typing `microskills_model=` offers available
+models as `provider/model-id`, in either scope; further typing filters the suggestions.
+Submitting the empty value still saves `""`, meaning inherit `paid_model`.
 
 **Where settings live, and when they apply.** For one session, an environment variable wins:
 `TE_` plus the setting's name in capitals (`TE_MICROSKILLS`, `TE_TOOLPRUNE_EVIDENCE`,

@@ -153,6 +153,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   let manual = "";
   let prompts = 0;
   let turn = "";
+  let modelRegistry: ExtensionContext["modelRegistry"] | undefined;
 
   const base = (ctx: ExtensionContext) => ({
     session_id: ctx.sessionManager.getSessionId(),
@@ -161,6 +162,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (event, ctx) => {
+    modelRegistry = ctx.modelRegistry;
     prompts = 0;
     const entries = (ctx.sessionManager.getBranch?.() ?? []) as any[];
     const carried = entries.some((e) => e?.type === "message");
@@ -272,6 +274,7 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
           mode: ["auto", "interactive", "headless"],
           microskills: ["off", "envfacts", "envfacts+distiller", "distiller", "on"],
           microskills_max_facts: [], microskills_max_tokens: [], microskills_propose_every: [],
+          microskills_model: [],
           toolprune: ["off", "propose", "auto", "on"],
           toolprune_evidence: [], toolprune_min_sessions: [], toolprune_sessions: [],
           toolprune_quiet_minutes: [], toolprune_protect: [],
@@ -301,7 +304,10 @@ export default function tokeneconomizer(pi: ExtensionAPI) {
         } else if (partial.includes("=")) {
           const key = partial.split("=", 1)[0];
           if (Object.hasOwn(settings, key)) {
-            options.push(...settings[key].map((value) => `${key}=${value}`));
+            const values = key === "microskills_model"
+              ? (modelRegistry?.getAvailable() ?? []).map((model) => `${model.provider}/${model.id}`)
+              : settings[key];
+            options.push(...values.map((value) => `${key}=${value}`));
           }
         } else {
           options.push(...Object.keys(settings).map((key) => `${key}=`));
