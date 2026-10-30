@@ -1110,15 +1110,15 @@ def test_refold_excludes_current_and_recent_sessions(env, repo, tmp_path):
     assert ctx.store.read("sessions/pi1.json")["folded"] is True  # Current record is untouched.
 
 
-@pytest.mark.parametrize("failure", ["missing", "learning"])
+@pytest.mark.parametrize("failure", ["conversion", "learning"])
 def test_refold_failure_before_publish_leaves_state_unchanged(env, repo, tmp_path, monkeypatch, failure):
     path = pi_trap_session(str(tmp_path / "old.jsonl"), repo, 1)
     run_session(env, repo, "pi1", path, host="pi")
     ctx = LiveContext.build(hosts.Pi(), repo, env)
     files = ["folded.json", "ledger.jsonl", "injection.json", "sessions/pi1.json"]
     before = {name: open(ctx.store.path(name), "rb").read() for name in files}
-    if failure == "missing":
-        os.remove(path)
+    if failure == "conversion":
+        monkeypatch.setattr(hosts.Pi, "mechanism_trace", lambda *args: None)
     else:
         def fail(*args, **kwargs):
             raise RuntimeError("simulated learning failure")
@@ -1126,6 +1126,65 @@ def test_refold_failure_before_publish_leaves_state_unchanged(env, repo, tmp_pat
     with pytest.raises(RuntimeError):
         fold.refold(ctx)
     assert {name: open(ctx.store.path(name), "rb").read() for name in files} == before
+
+
+@pytest.mark.parametrize("prior_usage", [None, 1234])
+def test_refold_skips_unpersisted_pi_logs_and_preserves_known_usage(env, repo, tmp_path, prior_usage):
+    from tokeneconomizer.plugin import accounting
+
+    path = pi_trap_session(str(tmp_path / "saved.jsonl"), repo, 1)
+    run_session(env, repo, "pi1", path, host="pi")
+    # Pi exposes a filename before creating it; closing without chatting leaves no log.
+    run_session(env, repo, "empty", str(tmp_path / "never-created.jsonl"), host="pi")
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    rows = ctx.store.read_lines("ledger.jsonl")
+    missing = rows[-1]
+    assert missing["error"] == "transcript unreadable"
+    if prior_usage is not None:
+        missing = dict(missing, effective_tokens=prior_usage, requests=1,
+                       injection={"rendered_chars": 999})
+        ctx.store.append("ledger.jsonl", missing)
+        ctx.store.append("ledger.jsonl", missing)
+        ctx.store.append("ledger.jsonl", rows[-1])  # A later unreadable row must not erase known usage.
+    expected = rows[0]["effective_tokens"] + (prior_usage or 0)
+    for _ in range(2):
+        result = fold.refold(ctx)
+        assert result["status"] == "completed" and result["sessions"] == 1
+        assert result["skipped"] == {"empty": "transcript missing"}
+        ledger = ctx.store.read_lines("ledger.jsonl")
+        assert len(ledger) == 2
+        assert accounting.summarize(ledger)["effective_tokens"] == expected
+        assert ctx.store.read("injection.json")["sessions"] == 1
+        skipped = next(r for r in ledger if r["session_id"] == "empty")
+        assert skipped["refold_skipped"] == "transcript missing"
+        assert not skipped.get("injection")
+        assert set(ctx.store.read("folded.json")) == {"pi1", "empty"}
+
+
+def test_refold_with_only_an_unpersisted_session_completes(env, repo, tmp_path):
+    run_session(env, repo, "empty", str(tmp_path / "not-saved.jsonl"), host="pi")
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    result = fold.refold(ctx)
+    assert result["sessions"] == 0 and result["skipped"] == {"empty": "transcript missing"}
+    assert ctx.store.read_lines("ledger.jsonl")[0]["refold_skipped"] == "transcript missing"
+
+
+def test_refold_does_not_hide_transcript_permission_errors(env, repo, tmp_path, monkeypatch):
+    path = pi_trap_session(str(tmp_path / "saved.jsonl"), repo, 1)
+    run_session(env, repo, "pi1", path, host="pi")
+    ctx = LiveContext.build(hosts.Pi(), repo, env)
+    before = ctx.store.read_lines("ledger.jsonl")
+    stat = os.stat
+
+    def denied(target, *args, **kwargs):
+        if str(target) == path:
+            raise PermissionError("transcript access denied")
+        return stat(target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", denied)
+    with pytest.raises(PermissionError, match="transcript access denied"):
+        fold.refold(ctx)
+    assert ctx.store.read_lines("ledger.jsonl") == before
 
 
 def test_refold_rolls_back_publication_errors(env, repo, tmp_path, monkeypatch):

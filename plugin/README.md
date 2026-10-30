@@ -324,14 +324,19 @@ backup path; `refold.log` in the state directory contains the worker's output.
 |---|---|
 | `folded.json` | Replaced with IDs processed by this rebuild; this is the authoritative skip list |
 | `sessions/*.json` `folded` flags | Recomputed for non-current sessions; transcript paths, turn history, and actual injection metadata are preserved |
-| `ledger.jsonl` session rows | Replaced, not appended, eliminating duplicate session usage totals |
+| `ledger.jsonl` session rows | Replaced, not appended, eliminating duplicate session usage totals; missing-log sessions retain known usage in one annotated row |
 | `ledger.jsonl` other rows | Preserved, including separately recorded background-judge charges |
 | `injection.json`, `mechanisms/` | Rebuilt from scratch, removing stale facts, lifecycle evidence, counters, and old proposer state |
 | `pi-discovery.json`, session records and source logs | Preserved; refold reuses registered sessions, it does not rescan for unregistered logs |
 | `envelope.json`, event history, notice state, repository map, pruning state/settings | Preserved; replay does not reconstruct live guard calibration or change tools |
 
-Missing transcripts or learning errors abort the staged rebuild and leave the previous
-learning and ledger intact. No reusable facts are guaranteed. New facts apply to later
+Pi may assign a transcript path without ever saving a file (for example, opening and closing
+Pi without chatting). Missing logs are skipped, not treated as learning evidence; completion
+reports the rebuilt and skipped counts. `refold.json` and `refold.log` list skipped session IDs
+and reasons. Any previously recorded usage for a missing log is retained in one ledger row,
+without reusing its old learning data. If a missing file is restored, a later refold can learn
+from it. Permission, conversion, and learning errors still abort the staged rebuild and leave
+the previous learning and ledger intact. No reusable facts are guaranteed. New facts apply to later
 sessions; the current conversation keeps its existing injected context. Session totals during
 a rebuild still describe the old state; after completion they describe only the sessions
 rebuilt, until pending sessions are folded normally. Historical per-session optimizer overhead

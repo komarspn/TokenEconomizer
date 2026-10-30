@@ -157,8 +157,9 @@ def cmd_status(args):
           f"({ledger['overhead_frac']:.1%})")
     if out["refold"]:
         job = out["refold"]
-        print(f"  refold       {job.get('status', 'unknown')}: "
-              f"{job.get('error') or str(job.get('sessions', 0)) + ' sessions rebuilt'}")
+        detail = job.get("error") or (f"{job.get('sessions', 0)} sessions rebuilt, "
+                                      f"{len(job.get('skipped', {}))} skipped")
+        print(f"  refold       {job.get('status', 'unknown')}: {detail}")
         if job.get("backup"):
             print(f"  backup       {job['backup']}")
     i = out["microskills"]
@@ -555,7 +556,10 @@ def cmd_refold(args):
             ctx.store.write("refold.json", result)
             print(f"refold failed: {exc}; see /te status for any backup path")
             return 1
-        print(f"refold completed: {result['sessions']} sessions; backup: {result['backup']}")
+        print(f"refold completed: {result['sessions']} sessions; "
+              f"{len(result['skipped'])} skipped; backup: {result['backup']}")
+        for sid, reason in result["skipped"].items():
+            print(f"  skipped {sid}: {reason}")
         return 0
 
 

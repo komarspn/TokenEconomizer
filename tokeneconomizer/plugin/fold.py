@@ -539,16 +539,28 @@ def refold(ctx, exclude=()):
             with tempfile.TemporaryDirectory(prefix=".refold-", dir=ctx.store.base) as temp:
                 staged = replace(ctx, store=Store(temp))
                 staged.store.ensure("mechanisms")
+                skipped = {}
                 for sid in sids:
                     name = os.path.join("sessions", f"{sid}.json")
                     session = dict(ctx.store.read(name) or {})
                     session.pop("folded", None)
                     # Historical logs without injection metadata must not gain invented feedback.
                     session.setdefault("injected_ids", [])
+                    transcript = session.get("transcript")
+                    missing = not transcript
+                    if transcript:
+                        try:
+                            os.stat(transcript)
+                        except FileNotFoundError:
+                            missing = True
                     staged.store.write(name, session)
                     record = fold_session(staged, sid)
-                    if record is None or record.get("error"):
-                        raise RuntimeError(f"cannot refold {sid}: transcript unavailable or fold failed")
+                    if record is None:
+                        raise RuntimeError(f"cannot refold {sid}: fold did not run")
+                    if record.get("error"):
+                        if not missing:
+                            raise RuntimeError(f"cannot refold {sid}: {record['error']}")
+                        skipped[sid] = "transcript missing"
                 names = ("mechanisms", "injection.json", "folded.json", "ledger.jsonl")
                 backup = tempfile.mkdtemp(prefix="refold-", dir=ctx.store.ensure("refold-backups"))
                 # Serialize ledger replacement with late background judge charges, too.
@@ -562,9 +574,28 @@ def refold(ctx, exclude=()):
                         elif os.path.exists(source):
                             shutil.copy2(source, os.path.join(backup, name))
                     shutil.copytree(ctx.store.path("sessions"), os.path.join(backup, "sessions"))
-                    rows = [r for r in ctx.store.read_lines("ledger.jsonl")
-                            if r.get("kind") != "session"]
-                    rows += staged.store.read_lines("ledger.jsonl")
+                    previous = {}
+                    rows = []
+                    for row in ctx.store.read_lines("ledger.jsonl"):
+                        if row.get("kind") != "session":
+                            rows.append(row)
+                            continue
+                        sid = row.get("session_id")
+                        known = previous.get(sid, {})
+                        if (isinstance(row.get("effective_tokens"), (int, float))
+                                or not isinstance(known.get("effective_tokens"), (int, float))):
+                            previous[sid] = row
+                    for row in staged.store.read_lines("ledger.jsonl"):
+                        sid = row.get("session_id")
+                        if sid in skipped:
+                            row["refold_skipped"] = skipped[sid]
+                            known = previous.get(sid, {})
+                            for key in ("effective_tokens", "priced_by", "model", "requests",
+                                        "input_tokens", "cache_read_input_tokens",
+                                        "cache_creation_input_tokens", "output_tokens", "overhead"):
+                                if key in known:
+                                    row[key] = known[key]
+                        rows.append(row)
                     with open(staged.store.path("ledger.jsonl"), "w", encoding="utf-8") as fh:
                         for row in rows:
                             fh.write(json.dumps(row, sort_keys=True) + "\n")
@@ -607,8 +638,8 @@ def refold(ctx, exclude=()):
                             shutil.copy2(os.path.join(backup, "sessions", name),
                                          ctx.store.path("sessions", name))
                         raise
-                result = {"status": "completed", "sessions": len(sids), "backup": backup,
-                          "at": time.time()}
+                result = {"status": "completed", "sessions": len(sids) - len(skipped),
+                          "skipped": skipped, "backup": backup, "at": time.time()}
                 ctx.store.write("refold.json", result)
                 return result
 
